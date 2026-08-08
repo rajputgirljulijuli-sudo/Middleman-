@@ -1,33 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  View, 
-  Text, 
-  TextInput, 
-  TouchableOpacity, 
-  StyleSheet, 
-  StatusBar, 
-  Alert, 
-  ScrollView, 
-  Switch, 
-  NativeModules, 
-  Platform,
-  Linking 
+  View, Text, TextInput, TouchableOpacity, StyleSheet, 
+  StatusBar, Alert, ScrollView, Switch, NativeModules, Platform, Linking 
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// 1. कैप्टचा रीड करने के लिए ML Kit इम्पोर्ट (जो पहले मिसिंग था)
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 
 const { IRCTCBridge } = NativeModules;
 
 export default function App() {
   const [trainNumber, setTrainNumber] = useState('');
-  const [passengerName, setPassengerName] = useState('');
-  const [passengerAge, setPassengerAge] = useState('');
   const [travelClass, setTravelClass] = useState('SL');
+  
+  // Multi-Passenger State (Array of objects)
+  const [passengers, setPassengers] = useState([{ name: '', age: '' }]);
   
   const [isGodModeActive, setIsGodModeActive] = useState(false);
   const [hasPermission, setHasPermission] = useState(false);
-  const [ocrText, setOcrText] = useState(''); // कैप्टचा रिज़ल्ट स्टोर करने के लिए
+  const [ocrText, setOcrText] = useState('');
 
   useEffect(() => {
     loadSavedData();
@@ -37,14 +27,12 @@ export default function App() {
   const loadSavedData = async () => {
     try {
       const savedTrain = await AsyncStorage.getItem('trainNumber');
-      const savedName = await AsyncStorage.getItem('passengerName');
-      const savedAge = await AsyncStorage.getItem('passengerAge');
       const savedClass = await AsyncStorage.getItem('travelClass');
+      const savedPassengers = await AsyncStorage.getItem('passengersData');
 
       if (savedTrain) setTrainNumber(savedTrain);
-      if (savedName) setPassengerName(savedName);
-      if (savedAge) setPassengerAge(savedAge);
       if (savedClass) setTravelClass(savedClass);
+      if (savedPassengers) setPassengers(JSON.parse(savedPassengers));
     } catch (e) {
       console.log('Error loading data', e);
     }
@@ -60,27 +48,51 @@ export default function App() {
   const requestPermission = () => {
     if (Platform.OS === 'android') {
       Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
-      Alert.alert(
-        "Permission Required", 
-        "कृपया सेटिंग्स में जाकर 'IRCTC God Mode' को On करें।"
-      );
+      Alert.alert("Permission Required", "कृपया सेटिंग्स में जाकर 'IRCTC God Mode' को On करें।");
     }
   };
 
+  const addPassenger = () => {
+    if (passengers.length < 4) {
+      setPassengers([...passengers, { name: '', age: '' }]);
+    } else {
+      Alert.alert('Limit Reached', 'आप अधिकतम 4 यात्री ही जोड़ सकते हैं।');
+    }
+  };
+
+  const removePassenger = (index) => {
+    const newPassengers = [...passengers];
+    newPassengers.splice(index, 1);
+    setPassengers(newPassengers);
+  };
+
+  const updatePassenger = (index, field, value) => {
+    const newPassengers = [...passengers];
+    newPassengers[index][field] = value;
+    setPassengers(newPassengers);
+  };
+
   const saveDataLocally = async () => {
-    if (!trainNumber || !passengerName || !passengerAge) {
-      Alert.alert('Error', 'कृपया यात्री की पूरी जानकारी भरें!');
+    if (!trainNumber) {
+      Alert.alert('Error', 'ट्रेन नंबर भरना ज़रूरी है!');
+      return;
+    }
+    
+    // Check if any passenger field is empty
+    const isAnyFieldEmpty = passengers.some(p => p.name === '' || p.age === '');
+    if (isAnyFieldEmpty) {
+      Alert.alert('Error', 'कृपया सभी यात्रियों के नाम और उम्र भरें!');
       return;
     }
 
     try {
       await AsyncStorage.setItem('trainNumber', trainNumber);
-      await AsyncStorage.setItem('passengerName', passengerName);
-      await AsyncStorage.setItem('passengerAge', passengerAge);
       await AsyncStorage.setItem('travelClass', travelClass);
+      await AsyncStorage.setItem('passengersData', JSON.stringify(passengers));
 
+      // Sending Data to Java Backend (as JSON String)
       if (IRCTCBridge && IRCTCBridge.syncPassengerData) {
-        IRCTCBridge.syncPassengerData(trainNumber, passengerName, passengerAge, travelClass);
+        IRCTCBridge.syncPassengerData(trainNumber, travelClass, JSON.stringify(passengers));
       }
 
       Alert.alert('Saved!', 'यात्री का डेटा लोकल स्टोरेज में सुरक्षित हो गया है।');
@@ -94,34 +106,23 @@ export default function App() {
       requestPermission();
       return;
     }
-
     setIsGodModeActive(value);
-    
     if (IRCTCBridge && IRCTCBridge.setGodModeStatus) {
       IRCTCBridge.setGodModeStatus(value);
     }
   };
 
-  // 2. Captcha Bypass (OCR Engine) का असली लॉजिक 
   const testCaptchaEngine = async () => {
-    // यहाँ भविष्य में आप स्क्रीनशॉट इमेज का लोकल पाथ (imageUri) पास कर सकते हैं।
-    // अभी के लिए इसे डमी रखा है ताकि ऐप क्रैश न हो।
     const dummyImageUri = null; 
-    
     if (!dummyImageUri) {
-      Alert.alert('Info', 'बैकग्राउंड स्क्रीनशॉट या इमेज पिकर लॉजिक कनेक्ट करना बाकी है!');
+      Alert.alert('Info', 'कैप्टचा इमेज पिकर या बैकग्राउंड स्क्रीनशॉट लॉजिक जुड़ना बाकी है!');
       return;
     }
-
     try {
       const result = await TextRecognition.recognize(dummyImageUri);
-      // IRCTC कैप्टचा में अक्सर फालतू स्पेस आ जाते हैं, उन्हें हटा रहे हैं
       const cleanedText = result.text.replace(/\s+/g, '');
       setOcrText(cleanedText);
-      Alert.alert('Captcha Bypassed 🚀', `Detected: ${cleanedText}`);
-      
     } catch (error) {
-      console.error(error);
       Alert.alert('Error', 'कैप्टचा रीड करने में समस्या हुई।');
     }
   };
@@ -129,7 +130,6 @@ export default function App() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0A0F14" />
-      
       <View style={styles.header}>
         <Text style={styles.headerTitle}>⚡ IRCTC GOD MODE</Text>
         <Text style={styles.headerSub}>Auto-Fill & Captcha Bypass Engine</Text>
@@ -137,7 +137,7 @@ export default function App() {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         
-        {/* Permission Status Box */}
+        {/* Permission Box */}
         <View style={styles.statusBox}>
           <View style={styles.row}>
             <View>
@@ -154,72 +154,58 @@ export default function App() {
           </View>
         </View>
 
-        {/* Form Section */}
+        {/* Train & Class Details */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Passenger Details</Text>
-          
+          <Text style={styles.cardTitle}>Journey Details</Text>
           <TextInput 
-            style={styles.input} 
-            placeholder="Train Number (e.g. 12423)" 
-            placeholderTextColor="#555"
-            keyboardType="numeric"
-            value={trainNumber}
-            onChangeText={setTrainNumber}
+            style={styles.input} placeholder="Train Number (e.g. 12423)" 
+            placeholderTextColor="#555" keyboardType="numeric"
+            value={trainNumber} onChangeText={setTrainNumber}
           />
-          
           <View style={styles.row}>
-            <TouchableOpacity 
-              style={[styles.classBtn, travelClass === 'SL' && styles.classBtnActive]} 
-              onPress={() => setTravelClass('SL')}
-            >
+            <TouchableOpacity style={[styles.classBtn, travelClass === 'SL' && styles.classBtnActive]} onPress={() => setTravelClass('SL')}>
               <Text style={[styles.classBtnText, travelClass === 'SL' && styles.classBtnTextActive]}>Sleeper (SL)</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.classBtn, travelClass === '3A' && styles.classBtnActive]} 
-              onPress={() => setTravelClass('3A')}
-            >
+            <TouchableOpacity style={[styles.classBtn, travelClass === '3A' && styles.classBtnActive]} onPress={() => setTravelClass('3A')}>
               <Text style={[styles.classBtnText, travelClass === '3A' && styles.classBtnTextActive]}>AC (3A/2A)</Text>
             </TouchableOpacity>
           </View>
-
-          <TextInput 
-            style={styles.input} 
-            placeholder="Passenger Name" 
-            placeholderTextColor="#555"
-            value={passengerName}
-            onChangeText={setPassengerName}
-          />
-
-          <TextInput 
-            style={styles.input} 
-            placeholder="Age" 
-            placeholderTextColor="#555"
-            keyboardType="numeric"
-            maxLength={2}
-            value={passengerAge}
-            onChangeText={setPassengerAge}
-          />
-
-          <TouchableOpacity style={styles.saveBtn} onPress={saveDataLocally}>
-            <Text style={styles.saveBtnText}>💾 SAVE & SYNC DATA</Text>
-          </TouchableOpacity>
         </View>
 
-        {/* Captcha Engine Status Card (नया जोड़ा गया है) */}
+        {/* Dynamic Passenger List */}
         <View style={styles.card}>
-           <Text style={styles.cardTitle}>OCR Captcha Engine</Text>
-           <Text style={{ color: '#888', fontSize: 12, marginBottom: 10 }}>
-              Text Recognition ML-Kit Status: Active
-           </Text>
-           <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#FF9800' }]} onPress={testCaptchaEngine}>
-            <Text style={styles.saveBtnText}>🔍 TEST CAPTCHA ENGINE</Text>
+          <View style={styles.row}>
+            <Text style={styles.cardTitle}>Passengers List ({passengers.length}/4)</Text>
+            <TouchableOpacity onPress={addPassenger}>
+              <Text style={{color: '#007BFF', fontWeight: 'bold'}}>+ ADD</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {passengers.map((p, index) => (
+            <View key={index} style={styles.passengerBox}>
+              <View style={styles.row}>
+                 <Text style={{color: '#888', marginBottom: 5}}>Passenger {index + 1}</Text>
+                 {index > 0 && (
+                   <TouchableOpacity onPress={() => removePassenger(index)}>
+                     <Text style={{color: '#FF4444', fontSize: 12}}>Remove</Text>
+                   </TouchableOpacity>
+                 )}
+              </View>
+              <TextInput 
+                style={styles.input} placeholder="Full Name" placeholderTextColor="#555"
+                value={p.name} onChangeText={(text) => updatePassenger(index, 'name', text)}
+              />
+              <TextInput 
+                style={styles.input} placeholder="Age" placeholderTextColor="#555"
+                keyboardType="numeric" maxLength={2}
+                value={p.age} onChangeText={(text) => updatePassenger(index, 'age', text)}
+              />
+            </View>
+          ))}
+
+          <TouchableOpacity style={styles.saveBtn} onPress={saveDataLocally}>
+            <Text style={styles.saveBtnText}>💾 SAVE & SYNC ALL DATA</Text>
           </TouchableOpacity>
-          {ocrText !== '' && (
-            <Text style={{ color: '#00E676', fontSize: 16, marginTop: 10, textAlign: 'center', fontWeight: 'bold' }}>
-               Result: {ocrText}
-            </Text>
-          )}
         </View>
 
         {/* God Mode Toggle */}
@@ -232,10 +218,8 @@ export default function App() {
               </Text>
             </View>
             <Switch 
-              value={isGodModeActive} 
-              onValueChange={toggleGodMode} 
-              trackColor={{ false: "#333", true: "#00E676" }} 
-              thumbColor={"#fff"} 
+              value={isGodModeActive} onValueChange={toggleGodMode} 
+              trackColor={{ false: "#333", true: "#00E676" }} thumbColor={"#fff"} 
             />
           </View>
         </View>
@@ -258,6 +242,7 @@ const styles = StyleSheet.create({
   fixBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   card: { backgroundColor: '#111820', padding: 20, borderRadius: 12, marginBottom: 15 },
   cardTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 15 },
+  passengerBox: { backgroundColor: '#162028', padding: 15, borderRadius: 8, marginBottom: 15, borderWidth: 1, borderColor: '#2A3942'},
   input: { backgroundColor: '#1A242D', color: '#fff', borderRadius: 8, padding: 15, fontSize: 16, marginBottom: 15, borderWidth: 1, borderColor: '#2A3942' },
   classBtn: { flex: 0.48, backgroundColor: '#1A242D', padding: 15, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#2A3942', marginBottom: 15 },
   classBtnActive: { backgroundColor: 'rgba(0, 230, 118, 0.1)', borderColor: '#00E676' },
