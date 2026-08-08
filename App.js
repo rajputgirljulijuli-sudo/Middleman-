@@ -65,7 +65,6 @@ export default function App() {
     }
   };
 
-  // मैनुअल पैसेंजर ऐड/रिमूव करने के फंक्शन (जो पहले मिसिंग थे)
   const addPassenger = () => {
     if (passengers.length < 4) {
       setPassengers([...passengers, { name: '', age: '' }]);
@@ -88,11 +87,10 @@ export default function App() {
 
   const saveDataLocally = async () => {
     if (!trainNumber || !irctcId || !irctcPassword) {
-      Alert.alert('Error', 'ट्रेन नंबर, IRCTC ID और Password भरना ज़रूरी है!');
+      Alert.alert('Error', 'ट्रेन नंबर, IRCTC ID / PIN और Password भरना ज़रूरी है!');
       return;
     }
 
-    // अगर यूज़र Master List इस्तेमाल नहीं कर रहा है, तो चेक करो कि उसने नाम भरा है या नहीं
     if (!useMasterList) {
         const isAnyFieldEmpty = passengers.some(p => p.name === '' || p.age === '');
         if (isAnyFieldEmpty) {
@@ -160,8 +158,9 @@ export default function App() {
         {/* Credentials */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Auto-Login Credentials</Text>
-          <TextInput style={styles.input} placeholder="IRCTC User ID" placeholderTextColor="#555" value={irctcId} onChangeText={setIrctcId} />
-          <TextInput style={styles.input} placeholder="IRCTC Password" placeholderTextColor="#555" secureTextEntry value={irctcPassword} onChangeText={setIrctcPassword} />
+          <Text style={{ color: '#aaa', fontSize: 12, marginBottom: 10 }}>अगर PIN से लॉगिन करना है, तो Password में अपना 4-digit PIN डालें।</Text>
+          <TextInput style={styles.input} placeholder="IRCTC User ID (Optional for PIN)" placeholderTextColor="#555" value={irctcId} onChangeText={setIrctcId} />
+          <TextInput style={styles.input} placeholder="IRCTC Password or 4-Digit PIN" placeholderTextColor="#555" secureTextEntry value={irctcPassword} onChangeText={setIrctcPassword} />
         </View>
 
         {/* Journey Details */}
@@ -201,7 +200,7 @@ export default function App() {
               {passengers.map((p, index) => (
                 <View key={index} style={styles.passengerBox}>
                   <View style={styles.row}>
-                     <Text style={{color: '#888', marginBottom: 5}}>Passenger {index + 1}</Text>
+                     <Text style={{color: '#888', marginBottom: 5}}>Passenger {index + 1} (Default: Male)</Text>
                      {index > 0 && (
                        <TouchableOpacity onPress={() => removePassenger(index)}>
                          <Text style={{color: '#FF4444', fontSize: 12}}>Remove</Text>
