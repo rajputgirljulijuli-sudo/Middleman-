@@ -239,6 +239,13 @@ public class AutoClickService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!IRCTCBridgeModule.isGodModeOn) return;
+        
+        // 1. THE MASTER LOCK: Sirf IRCTC app me hi run karega!
+        CharSequence pkgName = event.getPackageName();
+        if (pkgName == null || !pkgName.toString().contains("cris.org.in.prs.ima")) {
+            return; // Kisi aur app ko nahi chuyega
+        }
+
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
         if (rootNode != null) {
             scanAndBypass(rootNode, isPinScreen(rootNode), new int[]{0});
@@ -256,18 +263,16 @@ public class AutoClickService extends AccessibilityService {
         String desc = descSeq != null ? descSeq.toString().toLowerCase() : "";
         String hint = hintSeq != null ? hintSeq.toString().toLowerCase() : "";
 
-        // 1. AGGRESSIVE FORCE FILLER
+        // FORCE FILLER FOR LOGIN & PASSENGERS
         if (node.getClassName().toString().contains("EditText") && node.isEditable()) {
             editTextCount[0]++;
             
-            // PIN & Login Logic
             if (text.isEmpty()) {
                 if (isPinMode && editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
                 if (!isPinMode && editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pId); return; }
                 if (!isPinMode && editTextCount[0] == 2) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
             }
 
-            // Passenger Manual Entry
             if (!IRCTCBridgeModule.pUseMasterList && currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
                 String name = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
                 String age = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
@@ -277,7 +282,7 @@ public class AutoClickService extends AccessibilityService {
             }
         }
 
-        // 2. CAPTCHA BYPASS
+        // CAPTCHA BYPASS
         if ((text.contains("captcha") || desc.contains("captcha") || hint.contains("captcha") || text.contains("enter text")) && node.getClassName().toString().contains("EditText")) {
             if (!isProcessingCaptcha && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 isProcessingCaptcha = true;
@@ -286,15 +291,13 @@ public class AutoClickService extends AccessibilityService {
             }
         }
 
-        // 3. CLICKS & ACTIONS
+        // BUTTON CLICKS
         if (System.currentTimeMillis() - lastActionTime > getRandomDelay()) {
             
-            // Buttons
             if ((text.equals("login") || desc.equals("login") || text.equals("pay") || text.equals("submit") || text.equals("proceed")) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
             }
             
-            // Train & Class
             if (!IRCTCBridgeModule.pTrain.isEmpty() && text.contains(IRCTCBridgeModule.pTrain) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
             }
@@ -302,18 +305,15 @@ public class AutoClickService extends AccessibilityService {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
             }
 
-            // Master List vs Manual Add Passenger
             if (IRCTCBridgeModule.pUseMasterList) {
                 if (node.getClassName().toString().contains("CheckBox") && !node.isChecked()) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis();
                 }
             } else {
                 if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
-                    // Gender
                     if (node.getClassName().toString().contains("RadioButton") && (text.equals("male") || desc.equals("male"))) {
                         if (!node.isChecked()) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return; }
                     }
-                    // Add Passenger Button
                     if ((text.contains("add passenger") || desc.contains("add passenger")) && (node.isClickable() || node.getClassName().toString().contains("Button"))) {
                         node.performAction(AccessibilityNodeInfo.ACTION_CLICK); 
                         lastActionTime = System.currentTimeMillis(); 
@@ -323,7 +323,6 @@ public class AutoClickService extends AccessibilityService {
                 }
             }
 
-            // Payment Gateway
             if ((text.contains("bhim") || text.contains("upi") || desc.contains("bhim")) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
             }
