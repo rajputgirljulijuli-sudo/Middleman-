@@ -154,6 +154,7 @@ public class IRCTCBridgePackage implements ReactPackage {
 import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.os.Bundle;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -161,6 +162,7 @@ import android.graphics.Rect;
 import android.os.Build;
 import android.view.Display;
 import androidx.annotation.RequiresApi;
+import java.util.List;
 
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.TextRecognition;
@@ -182,6 +184,14 @@ public class AutoClickService extends AccessibilityService {
     private long getRandomDelay() { return 300 + (long)(Math.random() * 400); }
 
     private void fillEditText(AccessibilityNodeInfo node, String value) {
+        if (node == null || value == null || value.isEmpty()) return;
+        CharSequence currentText = node.getText();
+        
+        // Skip if already filled to prevent infinite loop
+        if (currentText != null && currentText.toString().equalsIgnoreCase(value)) {
+            return;
+        }
+
         Bundle args = new Bundle(); 
         args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
@@ -240,21 +250,35 @@ public class AutoClickService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!IRCTCBridgeModule.isGodModeOn) return;
         
-        // 1. THE MASTER LOCK: Sirf IRCTC app me hi run karega!
-        CharSequence pkgName = event.getPackageName();
+        AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
+        if (activeRoot == null) return;
+        
+        CharSequence pkgName = activeRoot.getPackageName();
         if (pkgName == null || !pkgName.toString().contains("cris.org.in.prs.ima")) {
-            return; // Kisi aur app ko nahi chuyega
+            return; // STRICT LOCK: Only run on IRCTC
         }
 
-        AccessibilityNodeInfo rootNode = getRootInActiveWindow();
-        if (rootNode != null) {
-            scanAndBypass(rootNode, isPinScreen(rootNode), new int[]{0});
+        boolean isPin = isPinScreen(activeRoot);
+        int[] editTextCount = {0};
+
+        // MEGA FIX: Scan ALL windows including Popups/Dialogs
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            for (AccessibilityWindowInfo window : windows) {
+                AccessibilityNodeInfo root = window.getRoot();
+                if (root != null) {
+                    scanAndBypass(root, isPin, editTextCount);
+                }
+            }
+        } else {
+            scanAndBypass(activeRoot, isPin, editTextCount);
         }
     }
 
     private void scanAndBypass(AccessibilityNodeInfo node, boolean isPinMode, int[] editTextCount) {
         if (node == null) return;
 
+        String className = node.getClassName() != null ? node.getClassName().toString() : "";
         CharSequence textSeq = node.getText();
         CharSequence descSeq = node.getContentDescription();
         CharSequence hintSeq = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ? node.getHintText() : null;
@@ -263,27 +287,48 @@ public class AutoClickService extends AccessibilityService {
         String desc = descSeq != null ? descSeq.toString().toLowerCase() : "";
         String hint = hintSeq != null ? hintSeq.toString().toLowerCase() : "";
 
-        // FORCE FILLER FOR LOGIN & PASSENGERS
-        if (node.getClassName().toString().contains("EditText") && node.isEditable()) {
+        // Auto-Reset passenger index if we are on search page
+        if (text.equals("book ticket") || text.contains("search train") || text.equals("plan my journey")) {
+            currentPassengerIndex = 0;
+        }
+
+        // Is it an input field? (Checks native editable property or class name)
+        boolean isInputField = node.isEditable() || className.contains("EditText") || className.contains("AutoCompleteTextView");
+
+        if (isInputField) {
             editTextCount[0]++;
             
-            if (text.isEmpty()) {
-                if (isPinMode && editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
-                if (!isPinMode && editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pId); return; }
-                if (!isPinMode && editTextCount[0] == 2) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
-            }
-
-            if (!IRCTCBridgeModule.pUseMasterList && currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
-                String name = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
-                String age = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
+            // PIN Login
+            if (isPinMode) {
+                if (editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
+            } 
+            // Normal Login
+            else if (hint.contains("user name") || text.contains("user name") || desc.contains("user name")) { 
+                fillEditText(node, IRCTCBridgeModule.pId); return; 
+            } 
+            else if (hint.contains("password") || text.contains("password") || desc.contains("password")) { 
+                fillEditText(node, IRCTCBridgeModule.pPass); return; 
+            } 
+            // Passenger Add Popup
+            else if (!IRCTCBridgeModule.pUseMasterList && currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
+                String targetName = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
+                String targetAge = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
                 
-                if (editTextCount[0] == 1 && text.isEmpty()) { fillEditText(node, name); return; }
-                if (editTextCount[0] == 2 && text.isEmpty()) { fillEditText(node, age); return; }
+                if (hint.contains("name") || text.contains("name") || desc.contains("name") || hint.contains("first name")) { 
+                    fillEditText(node, targetName); return; 
+                }
+                if (hint.contains("age") || text.contains("age") || desc.contains("age") || text.equals("yea") || hint.contains("year")) { 
+                    fillEditText(node, targetAge); return; 
+                }
+
+                // Blind Fallback for popup
+                if (editTextCount[0] == 1) { fillEditText(node, targetName); return; }
+                if (editTextCount[0] == 2) { fillEditText(node, targetAge); return; }
             }
         }
 
         // CAPTCHA BYPASS
-        if ((text.contains("captcha") || desc.contains("captcha") || hint.contains("captcha") || text.contains("enter text")) && node.getClassName().toString().contains("EditText")) {
+        if ((text.contains("captcha") || desc.contains("captcha") || hint.contains("captcha") || text.contains("enter text")) && className.contains("EditText")) {
             if (!isProcessingCaptcha && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 isProcessingCaptcha = true;
                 processSilentCaptchaScreenshot(node);
@@ -291,7 +336,7 @@ public class AutoClickService extends AccessibilityService {
             }
         }
 
-        // BUTTON CLICKS
+        // BUTTON CLICKS (Runs only if delay has passed since last typing action)
         if (System.currentTimeMillis() - lastActionTime > getRandomDelay()) {
             
             if ((text.equals("login") || desc.equals("login") || text.equals("pay") || text.equals("submit") || text.equals("proceed")) && node.isClickable()) {
@@ -306,15 +351,17 @@ public class AutoClickService extends AccessibilityService {
             }
 
             if (IRCTCBridgeModule.pUseMasterList) {
-                if (node.getClassName().toString().contains("CheckBox") && !node.isChecked()) {
+                if (className.contains("CheckBox") && !node.isChecked()) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis();
                 }
             } else {
                 if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
-                    if (node.getClassName().toString().contains("RadioButton") && (text.equals("male") || desc.equals("male"))) {
+                    // Click Male Radio Button
+                    if ((className.contains("RadioButton") || className.contains("CheckedTextView")) && (text.equals("male") || desc.equals("male"))) {
                         if (!node.isChecked()) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return; }
                     }
-                    if ((text.contains("add passenger") || desc.contains("add passenger")) && (node.isClickable() || node.getClassName().toString().contains("Button"))) {
+                    // Click Add Passenger (Red Button)
+                    if ((text.contains("add passenger") || desc.contains("add passenger")) && (node.isClickable() || className.contains("Button"))) {
                         node.performAction(AccessibilityNodeInfo.ACTION_CLICK); 
                         lastActionTime = System.currentTimeMillis(); 
                         currentPassengerIndex++; 
