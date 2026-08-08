@@ -19,10 +19,17 @@ jobs:
       - name: ⚙️ Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Node.js 20 (Required for latest Expo)
+          node-version: '20'
+
+      - name: 🔍 Debug - Check Files
+        run: |
+          echo "Checking if package.json exists..."
+          cat package.json || echo "ERROR: package.json is missing!"
 
       - name: 📦 Install dependencies
-        run: npm install --legacy-peer-deps # Bypasses strict peer dependency checks
+        run: |
+          npm cache clean --force
+          npm install --legacy-peer-deps
 
       - name: 🏗️ Expo Prebuild (Generate Native Android Code)
         run: npx expo prebuild --platform android --clean
