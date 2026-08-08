@@ -1,24 +1,30 @@
-const { withAndroidManifest, withDangerousMod, withMainApplication } = require('@expo/config-plugins');
+const { withAndroidManifest, withDangerousMod, withMainApplication, withAppBuildGradle } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
 module.exports = function withIRCTCAutomator(config) {
   
+  // 1. ML-Kit Dependency in Gradle (So Android knows how to read images)
+  config = withAppBuildGradle(config, (config) => {
+    if (!config.modResults.contents.includes('play-services-mlkit-text-recognition')) {
+      config.modResults.contents = config.modResults.contents.replace(
+        /dependencies\s?{/,
+        `dependencies {\n    implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.0'`
+      );
+    }
+    return config;
+  });
+
+  // 2. Android Manifest Updates
   config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults;
-    
-    if (!manifest.manifest.queries) {
-        manifest.manifest.queries = [{ package: [] }];
-    } else if (!manifest.manifest.queries[0].package) {
-        manifest.manifest.queries[0].package = [];
-    }
+    if (!manifest.manifest.queries) manifest.manifest.queries = [{ package: [] }];
+    else if (!manifest.manifest.queries[0].package) manifest.manifest.queries[0].package = [];
 
     const packagesToQuery = ["cris.org.in.prs.ima"];
     packagesToQuery.forEach(pkg => {
         const exists = manifest.manifest.queries[0].package.some(p => p.$['android:name'] === pkg);
-        if (!exists) {
-            manifest.manifest.queries[0].package.push({ '$': { 'android:name': pkg } });
-        }
+        if (!exists) manifest.manifest.queries[0].package.push({ '$': { 'android:name': pkg } });
     });
 
     const app = manifest.manifest.application[0];
@@ -39,6 +45,7 @@ module.exports = function withIRCTCAutomator(config) {
     return config;
   });
 
+  // 3. Native Java Engine (With Captcha ML-Kit Bypass)
   config = withDangerousMod(config, [
     'android',
     (config) => {
@@ -53,9 +60,10 @@ module.exports = function withIRCTCAutomator(config) {
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewClicked"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows|flagReportViewIds|flagRequestTouchExplorationMode"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true" 
+    android:canTakeScreenshot="true"
     android:notificationTimeout="0" />`; 
       
       const bridgeModuleContent = `package com.irctcgodmode;
@@ -97,9 +105,7 @@ public class IRCTCBridgeModule extends ReactContextBaseJavaModule {
                 map.put("age", obj.getString("age"));
                 passengersList.add(map);
             }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        } catch (Exception e) {}
     }
 
     @ReactMethod
@@ -165,15 +171,31 @@ import android.accessibilityservice.AccessibilityService;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.os.Bundle;
+import android.graphics.Bitmap;
+import android.graphics.Rect;
+import android.os.Build;
+import android.view.Display;
+import androidx.annotation.RequiresApi;
+
+// ML Kit Imports
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.TextRecognizer;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
 public class AutoClickService extends AccessibilityService {
     private long lastActionTime = 0;
-    private int currentPassengerIndex = 0; // Tracks which passenger is being filled
+    private int currentPassengerIndex = 0; 
+    private boolean isProcessingCaptcha = false;
+    private TextRecognizer recognizer;
 
-    // Random Human Delay (400ms to 900ms) to bypass Bot Detection
-    private long getRandomDelay() {
-        return 400 + (long)(Math.random() * 500);
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     }
+
+    private long getRandomDelay() { return 400 + (long)(Math.random() * 500); }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -182,11 +204,10 @@ public class AutoClickService extends AccessibilityService {
         CharSequence pkgName = event.getPackageName();
         if (pkgName == null || !pkgName.toString().contains("cris.org.in.prs.ima")) return;
 
-        // Reset index if we reach booking summary or home (To be safe)
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
              CharSequence className = event.getClassName();
              if (className != null && className.toString().contains("DashboardActivity")) {
-                 currentPassengerIndex = 0; // Reset on Dashboard
+                 currentPassengerIndex = 0; 
              }
         }
 
@@ -204,36 +225,39 @@ public class AutoClickService extends AccessibilityService {
         String text = textSeq != null ? textSeq.toString().toLowerCase() : "";
         String desc = descSeq != null ? descSeq.toString().toLowerCase() : "";
 
+        // Captcha Detection & Screenshot Logic (Android 11+)
+        if ((text.contains("captcha") || desc.contains("captcha") || text.contains("enter text")) && node.getClassName().toString().contains("EditText")) {
+            if (!isProcessingCaptcha && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                isProcessingCaptcha = true;
+                processSilentCaptchaScreenshot(node);
+                return; // Stop further scanning while processing
+            }
+        }
+
         if (System.currentTimeMillis() - lastActionTime > getRandomDelay()) {
             
-            // 1. Auto Login
             if ((text.equals("login") || desc.equals("login")) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
             
-            // 2. Train Selection
             if (!IRCTCBridgeModule.pTrain.isEmpty() && text.contains(IRCTCBridgeModule.pTrain) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
 
-            // 3. Class Selection (SL / 3A)
             if (!IRCTCBridgeModule.pClass.isEmpty() && text.equals(IRCTCBridgeModule.pClass.toLowerCase()) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
 
-            // 4. Fill Passenger Name & Age dynamically from ArrayList
             if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
-                
                 String targetName = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
                 String targetAge = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
 
-                // Fill Name
                 if ((text.contains("first name") || text.contains("passenger name") || desc.contains("name")) && node.getClassName().toString().contains("EditText")) {
                     Bundle arguments = new Bundle();
                     arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName);
@@ -242,14 +266,11 @@ public class AutoClickService extends AccessibilityService {
                     return;
                 }
                 
-                // Fill Age & Move to Next Index
                 if ((text.contains("age") || desc.contains("age") || text.equals("yea")) && node.getClassName().toString().contains("EditText")) {
                     Bundle arguments = new Bundle();
                     arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetAge);
                     node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
                     lastActionTime = System.currentTimeMillis();
-                    
-                    // Increment passenger index after age is filled so it moves to next person
                     currentPassengerIndex++; 
                     return;
                 }
@@ -260,6 +281,57 @@ public class AutoClickService extends AccessibilityService {
         for (int i = 0; i < childCount; i++) {
             scanAndBypass(node.getChild(i));
         }
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.R)
+    private void processSilentCaptchaScreenshot(AccessibilityNodeInfo captchaInputNode) {
+        takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+            @Override
+            public void onSuccess(ScreenshotResult result) {
+                try {
+                    Bitmap fullScreen = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
+                    
+                    Rect inputBounds = new Rect();
+                    captchaInputNode.getBoundsInScreen(inputBounds);
+
+                    // Crop an area directly above the Captcha Box where the image usually sits
+                    int cropY = Math.max(0, inputBounds.top - 300); 
+                    int cropHeight = 300;
+                    int cropWidth = Math.min(inputBounds.width() + 150, fullScreen.getWidth() - inputBounds.left);
+                    
+                    Bitmap captchaBitmap = Bitmap.createBitmap(fullScreen, inputBounds.left, cropY, cropWidth, cropHeight);
+                    InputImage image = InputImage.fromBitmap(captchaBitmap, 0);
+                    
+                    recognizer.process(image)
+                        .addOnSuccessListener(visionText -> {
+                            String rawText = visionText.getText();
+                            // Keep only letters and numbers, remove special chars and spaces
+                            String cleanCaptcha = rawText.replaceAll("[^a-zA-Z0-9]", "");
+                            
+                            if (cleanCaptcha.length() >= 4) {
+                                Bundle arguments = new Bundle();
+                                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cleanCaptcha);
+                                captchaInputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+                                lastActionTime = System.currentTimeMillis();
+                            }
+                            
+                            // 3 second timeout before trying another screenshot (prevents looping)
+                            new android.os.Handler(getMainLooper()).postDelayed(() -> isProcessingCaptcha = false, 3000);
+                        })
+                        .addOnFailureListener(e -> {
+                            isProcessingCaptcha = false;
+                        });
+
+                } catch (Exception e) {
+                    isProcessingCaptcha = false;
+                }
+            }
+
+            @Override
+            public void onFailure(int errorCode) {
+                isProcessingCaptcha = false;
+            }
+        });
     }
 
     @Override
