@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "IRCTC God Mode",
+    "slug": "irctc-god-mode",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "backgroundColor": "#0A0F14",
+    "android": {
+      "package": "com.irctcgodmode",
+      "permissions": [
+        "android.permission.BIND_ACCESSIBILITY_SERVICE",
+        "android.permission.INTERNET",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.VIBRATE"
+      ]
+    },
+    "plugins": [
+      "./withIRCTCAutomator.js"
+    ]
+  }
+}
