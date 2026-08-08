@@ -4,7 +4,6 @@ const path = require('path');
 
 module.exports = function withIRCTCAutomator(config) {
   
-  // 1. Add ML Kit Dependency
   config = withAppBuildGradle(config, (config) => {
     if (!config.modResults.contents.includes('play-services-mlkit-text-recognition')) {
       config.modResults.contents = config.modResults.contents.replace(
@@ -15,7 +14,6 @@ module.exports = function withIRCTCAutomator(config) {
     return config;
   });
 
-  // 2. Add Accessibility Service to AndroidManifest
   config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults;
     if (!manifest.manifest.queries) manifest.manifest.queries = [{ package: [] }];
@@ -45,7 +43,6 @@ module.exports = function withIRCTCAutomator(config) {
     return config;
   });
 
-  // 3. Inject Native Java Code (The Master Engine)
   config = withDangerousMod(config, [
     'android',
     (config) => {
@@ -182,9 +179,15 @@ public class AutoClickService extends AccessibilityService {
         recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     }
 
-    private long getRandomDelay() { return 400 + (long)(Math.random() * 500); }
+    private long getRandomDelay() { return 300 + (long)(Math.random() * 400); }
 
-    // Helper: Detect if we are on PIN screen
+    private void fillEditText(AccessibilityNodeInfo node, String value) {
+        Bundle args = new Bundle(); 
+        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+        lastActionTime = System.currentTimeMillis();
+    }
+
     private boolean isPinScreen(AccessibilityNodeInfo node) {
         if (node == null) return false;
         CharSequence txt = node.getText();
@@ -193,14 +196,6 @@ public class AutoClickService extends AccessibilityService {
             if (isPinScreen(node.getChild(i))) return true;
         }
         return false;
-    }
-
-    // Helper: Fill EditText
-    private void fillEditText(AccessibilityNodeInfo node, String value) {
-        Bundle args = new Bundle(); 
-        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
-        lastActionTime = System.currentTimeMillis();
     }
 
     private Bitmap cleanCaptchaImage(Bitmap src) {
@@ -246,11 +241,11 @@ public class AutoClickService extends AccessibilityService {
         if (!IRCTCBridgeModule.isGodModeOn) return;
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
         if (rootNode != null) {
-            scanAndBypass(rootNode, isPinScreen(rootNode));
+            scanAndBypass(rootNode, isPinScreen(rootNode), new int[]{0});
         }
     }
 
-    private void scanAndBypass(AccessibilityNodeInfo node, boolean isPinMode) {
+    private void scanAndBypass(AccessibilityNodeInfo node, boolean isPinMode, int[] editTextCount) {
         if (node == null) return;
 
         CharSequence textSeq = node.getText();
@@ -261,18 +256,24 @@ public class AutoClickService extends AccessibilityService {
         String desc = descSeq != null ? descSeq.toString().toLowerCase() : "";
         String hint = hintSeq != null ? hintSeq.toString().toLowerCase() : "";
 
-        // 1. PIN & LOGIN FILLER
+        // 1. AGGRESSIVE FORCE FILLER
         if (node.getClassName().toString().contains("EditText") && node.isEditable()) {
+            editTextCount[0]++;
+            
+            // PIN & Login Logic
             if (text.isEmpty()) {
-                if (isPinMode && IRCTCBridgeModule.pPass.length() >= 4) {
-                    // Fill PIN from password field
-                    fillEditText(node, IRCTCBridgeModule.pPass);
-                    return;
-                } else {
-                    // Regular Login ID & Password
-                    if (hint.contains("user name") || desc.contains("user name")) { fillEditText(node, IRCTCBridgeModule.pId); return; }
-                    if (hint.contains("password") || desc.contains("password")) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
-                }
+                if (isPinMode && editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
+                if (!isPinMode && editTextCount[0] == 1) { fillEditText(node, IRCTCBridgeModule.pId); return; }
+                if (!isPinMode && editTextCount[0] == 2) { fillEditText(node, IRCTCBridgeModule.pPass); return; }
+            }
+
+            // Passenger Manual Entry
+            if (!IRCTCBridgeModule.pUseMasterList && currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
+                String name = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
+                String age = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
+                
+                if (editTextCount[0] == 1 && text.isEmpty()) { fillEditText(node, name); return; }
+                if (editTextCount[0] == 2 && text.isEmpty()) { fillEditText(node, age); return; }
             }
         }
 
@@ -285,11 +286,11 @@ public class AutoClickService extends AccessibilityService {
             }
         }
 
-        // 3. CLICKS & ACTIONS (Only trigger if delay passed)
+        // 3. CLICKS & ACTIONS
         if (System.currentTimeMillis() - lastActionTime > getRandomDelay()) {
             
             // Buttons
-            if ((text.equals("login") || desc.equals("login") || text.equals("pay") || text.equals("submit")) && node.isClickable()) {
+            if ((text.equals("login") || desc.equals("login") || text.equals("pay") || text.equals("submit") || text.equals("proceed")) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
             }
             
@@ -301,34 +302,22 @@ public class AutoClickService extends AccessibilityService {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
             }
 
-            // Master List vs Manual
+            // Master List vs Manual Add Passenger
             if (IRCTCBridgeModule.pUseMasterList) {
                 if (node.getClassName().toString().contains("CheckBox") && !node.isChecked()) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis();
                 }
             } else {
                 if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
-                    String targetName = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
-                    String targetAge = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
-
-                    // Fill Name & Age
-                    if (node.getClassName().toString().contains("EditText")) {
-                        if (text.contains("name") || hint.contains("name") || desc.contains("name")) { fillEditText(node, targetName); return; }
-                        if (text.contains("age") || hint.contains("age") || desc.contains("age")) { fillEditText(node, targetAge); return; }
-                    }
-                    
-                    // Select Gender (Defaults to Male)
+                    // Gender
                     if (node.getClassName().toString().contains("RadioButton") && (text.equals("male") || desc.equals("male"))) {
-                        if (!node.isChecked()) {
-                            node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return;
-                        }
+                        if (!node.isChecked()) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); lastActionTime = System.currentTimeMillis(); return; }
                     }
-
-                    // Click Add Passenger (Red Button at bottom)
+                    // Add Passenger Button
                     if ((text.contains("add passenger") || desc.contains("add passenger")) && (node.isClickable() || node.getClassName().toString().contains("Button"))) {
                         node.performAction(AccessibilityNodeInfo.ACTION_CLICK); 
                         lastActionTime = System.currentTimeMillis(); 
-                        currentPassengerIndex++; // Move to next passenger ONLY after this button is clicked
+                        currentPassengerIndex++; 
                         return;
                     }
                 }
@@ -343,8 +332,7 @@ public class AutoClickService extends AccessibilityService {
             }
         }
 
-        int childCount = node.getChildCount();
-        for (int i = 0; i < childCount; i++) scanAndBypass(node.getChild(i), isPinMode);
+        for (int i = 0; i < node.getChildCount(); i++) scanAndBypass(node.getChild(i), isPinMode, editTextCount);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.R)
@@ -390,7 +378,6 @@ public class AutoClickService extends AccessibilityService {
     }
   ]);
 
-  // 4. Inject React Package into MainApplication (THE MISSING LINK)
   config = withMainApplication(config, (config) => {
     let content = config.modResults.contents;
     if (config.modResults.language === 'kt') {
