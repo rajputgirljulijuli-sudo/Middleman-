@@ -4,7 +4,6 @@ const path = require('path');
 
 module.exports = function withIRCTCAutomator(config) {
   
-  // 1. ML-Kit Dependency in Gradle (So Android knows how to read images)
   config = withAppBuildGradle(config, (config) => {
     if (!config.modResults.contents.includes('play-services-mlkit-text-recognition')) {
       config.modResults.contents = config.modResults.contents.replace(
@@ -15,7 +14,6 @@ module.exports = function withIRCTCAutomator(config) {
     return config;
   });
 
-  // 2. Android Manifest Updates
   config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults;
     if (!manifest.manifest.queries) manifest.manifest.queries = [{ package: [] }];
@@ -45,7 +43,6 @@ module.exports = function withIRCTCAutomator(config) {
     return config;
   });
 
-  // 3. Native Java Engine (With Captcha ML-Kit Bypass)
   config = withDangerousMod(config, [
     'android',
     (config) => {
@@ -79,8 +76,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 
 public class IRCTCBridgeModule extends ReactContextBaseJavaModule {
+    public static String pId = "";
+    public static String pPass = "";
     public static String pTrain = "";
     public static String pClass = "";
+    public static String pPayMode = "";
+    public static boolean pUseMasterList = true;
     public static ArrayList<HashMap<String, String>> passengersList = new ArrayList<>();
     public static boolean isGodModeOn = false;
 
@@ -92,12 +93,16 @@ public class IRCTCBridgeModule extends ReactContextBaseJavaModule {
     public String getName() { return "IRCTCBridge"; }
 
     @ReactMethod
-    public void syncPassengerData(String train, String tClass, String passengersJson) {
+    public void syncFullData(String id, String pass, String train, String tClass, String payMode, boolean masterList, String passJson) {
+        pId = id;
+        pPass = pass;
         pTrain = train;
         pClass = tClass;
+        pPayMode = payMode;
+        pUseMasterList = masterList;
         passengersList.clear();
         try {
-            JSONArray arr = new JSONArray(passengersJson);
+            JSONArray arr = new JSONArray(passJson);
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject obj = arr.getJSONObject(i);
                 HashMap<String, String> map = new HashMap<>();
@@ -154,10 +159,7 @@ import java.util.List;
 
 public class IRCTCBridgePackage implements ReactPackage {
     @Override
-    public List<ViewManager> createViewManagers(ReactApplicationContext reactContext) {
-        return Collections.emptyList();
-    }
-
+    public List<ViewManager> createViewManagers(ReactApplicationContext reactContext) { return Collections.emptyList(); }
     @Override
     public List<NativeModule> createNativeModules(ReactApplicationContext reactContext) {
         List<NativeModule> modules = new ArrayList<>();
@@ -172,12 +174,12 @@ import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.os.Bundle;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.Rect;
 import android.os.Build;
 import android.view.Display;
 import androidx.annotation.RequiresApi;
 
-// ML Kit Imports
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
@@ -197,24 +199,38 @@ public class AutoClickService extends AccessibilityService {
 
     private long getRandomDelay() { return 400 + (long)(Math.random() * 500); }
 
+    // 🔥 Image Filter: High Contrast & Binarization for 100% Accuracy
+    private Bitmap cleanCaptchaImage(Bitmap src) {
+        int width = src.getWidth();
+        int height = src.getHeight();
+        Bitmap bmOut = Bitmap.createBitmap(width, height, src.getConfig());
+        for (int x = 0; x < width; ++x) {
+            for (int y = 0; y < height; ++y) {
+                int pixel = src.getPixel(x, y);
+                int r = Color.red(pixel);
+                int g = Color.green(pixel);
+                int b = Color.blue(pixel);
+                // Convert to Grayscale
+                int gray = (int) (0.299 * r + 0.587 * g + 0.114 * b);
+                // Remove noisy background lines by turning dark parts black, light parts white
+                if (gray > 130) {
+                    bmOut.setPixel(x, y, Color.WHITE);
+                } else {
+                    bmOut.setPixel(x, y, Color.BLACK);
+                }
+            }
+        }
+        return bmOut;
+    }
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!IRCTCBridgeModule.isGodModeOn) return;
-        
         CharSequence pkgName = event.getPackageName();
         if (pkgName == null || !pkgName.toString().contains("cris.org.in.prs.ima")) return;
 
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-             CharSequence className = event.getClassName();
-             if (className != null && className.toString().contains("DashboardActivity")) {
-                 currentPassengerIndex = 0; 
-             }
-        }
-
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
-        if (rootNode != null) {
-            scanAndBypass(rootNode);
-        }
+        if (rootNode != null) scanAndBypass(rootNode);
     }
 
     private void scanAndBypass(AccessibilityNodeInfo node) {
@@ -225,12 +241,24 @@ public class AutoClickService extends AccessibilityService {
         String text = textSeq != null ? textSeq.toString().toLowerCase() : "";
         String desc = descSeq != null ? descSeq.toString().toLowerCase() : "";
 
-        // Captcha Detection & Screenshot Logic (Android 11+)
+        // 🎯 1. Auto Login Credentials Injection
+        if ((text.contains("user name") || desc.contains("user name")) && node.getClassName().toString().contains("EditText")) {
+            Bundle args = new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, IRCTCBridgeModule.pId);
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+        }
+        if ((text.contains("password") || desc.contains("password")) && node.getClassName().toString().contains("EditText")) {
+            Bundle args = new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, IRCTCBridgeModule.pPass);
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+        }
+
+        // 🎯 2. Stealth Captcha Trigger (Login & Review Page)
         if ((text.contains("captcha") || desc.contains("captcha") || text.contains("enter text")) && node.getClassName().toString().contains("EditText")) {
             if (!isProcessingCaptcha && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 isProcessingCaptcha = true;
                 processSilentCaptchaScreenshot(node);
-                return; // Stop further scanning while processing
+                return;
             }
         }
 
@@ -238,49 +266,58 @@ public class AutoClickService extends AccessibilityService {
             
             if ((text.equals("login") || desc.equals("login")) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                lastActionTime = System.currentTimeMillis();
-                return;
+                lastActionTime = System.currentTimeMillis(); return;
             }
             
             if (!IRCTCBridgeModule.pTrain.isEmpty() && text.contains(IRCTCBridgeModule.pTrain) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                lastActionTime = System.currentTimeMillis();
-                return;
+                lastActionTime = System.currentTimeMillis(); return;
             }
 
             if (!IRCTCBridgeModule.pClass.isEmpty() && text.equals(IRCTCBridgeModule.pClass.toLowerCase()) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                lastActionTime = System.currentTimeMillis();
-                return;
+                lastActionTime = System.currentTimeMillis(); return;
             }
 
-            if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
-                String targetName = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
-                String targetAge = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
+            // 🎯 3. Master List OR Typing Mode
+            if (IRCTCBridgeModule.pUseMasterList) {
+                // Checkbox tick for Master List
+                if (node.getClassName().toString().contains("CheckBox") && !node.isChecked()) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                    lastActionTime = System.currentTimeMillis();
+                }
+            } else {
+                // Fallback to Typing if Master List is off
+                if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
+                    String targetName = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
+                    String targetAge = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
 
-                if ((text.contains("first name") || text.contains("passenger name") || desc.contains("name")) && node.getClassName().toString().contains("EditText")) {
-                    Bundle arguments = new Bundle();
-                    arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName);
-                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
-                    lastActionTime = System.currentTimeMillis();
-                    return;
+                    if ((text.contains("first name") || text.contains("passenger name") || desc.contains("name")) && node.getClassName().toString().contains("EditText")) {
+                        Bundle args = new Bundle(); args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName);
+                        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args); lastActionTime = System.currentTimeMillis(); return;
+                    }
+                    
+                    if ((text.contains("age") || desc.contains("age") || text.equals("yea")) && node.getClassName().toString().contains("EditText")) {
+                        Bundle args = new Bundle(); args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetAge);
+                        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args); lastActionTime = System.currentTimeMillis();
+                        currentPassengerIndex++; return;
+                    }
                 }
-                
-                if ((text.contains("age") || desc.contains("age") || text.equals("yea")) && node.getClassName().toString().contains("EditText")) {
-                    Bundle arguments = new Bundle();
-                    arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetAge);
-                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
-                    lastActionTime = System.currentTimeMillis();
-                    currentPassengerIndex++; 
-                    return;
-                }
+            }
+
+            // 🎯 4. Payment Gateway Auto-Select
+            if ((text.contains("bhim") || text.contains("upi") || desc.contains("bhim")) && node.isClickable()) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                lastActionTime = System.currentTimeMillis(); return;
+            }
+            if (!IRCTCBridgeModule.pPayMode.isEmpty() && (text.contains(IRCTCBridgeModule.pPayMode) || desc.contains(IRCTCBridgeModule.pPayMode)) && node.isClickable()) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                lastActionTime = System.currentTimeMillis(); return;
             }
         }
 
         int childCount = node.getChildCount();
-        for (int i = 0; i < childCount; i++) {
-            scanAndBypass(node.getChild(i));
-        }
+        for (int i = 0; i < childCount; i++) scanAndBypass(node.getChild(i));
     }
 
     @RequiresApi(api = Build.VERSION_CODES.R)
@@ -290,50 +327,40 @@ public class AutoClickService extends AccessibilityService {
             public void onSuccess(ScreenshotResult result) {
                 try {
                     Bitmap fullScreen = Bitmap.wrapHardwareBuffer(result.getHardwareBuffer(), result.getColorSpace());
-                    
                     Rect inputBounds = new Rect();
                     captchaInputNode.getBoundsInScreen(inputBounds);
 
-                    // Crop an area directly above the Captcha Box where the image usually sits
-                    int cropY = Math.max(0, inputBounds.top - 300); 
-                    int cropHeight = 300;
+                    // Crop an area directly above the Captcha Box
+                    int cropY = Math.max(0, inputBounds.top - 250); 
+                    int cropHeight = 250;
                     int cropWidth = Math.min(inputBounds.width() + 150, fullScreen.getWidth() - inputBounds.left);
                     
-                    Bitmap captchaBitmap = Bitmap.createBitmap(fullScreen, inputBounds.left, cropY, cropWidth, cropHeight);
-                    InputImage image = InputImage.fromBitmap(captchaBitmap, 0);
+                    Bitmap rawCaptchaBitmap = Bitmap.createBitmap(fullScreen, inputBounds.left, cropY, cropWidth, cropHeight);
                     
+                    // APPLY BINARIZATION FILTER
+                    Bitmap cleanedCaptcha = cleanCaptchaImage(rawCaptchaBitmap);
+
+                    InputImage image = InputImage.fromBitmap(cleanedCaptcha, 0);
                     recognizer.process(image)
                         .addOnSuccessListener(visionText -> {
                             String rawText = visionText.getText();
-                            // Keep only letters and numbers, remove special chars and spaces
                             String cleanCaptcha = rawText.replaceAll("[^a-zA-Z0-9]", "");
                             
                             if (cleanCaptcha.length() >= 4) {
-                                Bundle arguments = new Bundle();
-                                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cleanCaptcha);
-                                captchaInputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+                                Bundle args = new Bundle();
+                                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cleanCaptcha);
+                                captchaInputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
                                 lastActionTime = System.currentTimeMillis();
                             }
-                            
-                            // 3 second timeout before trying another screenshot (prevents looping)
                             new android.os.Handler(getMainLooper()).postDelayed(() -> isProcessingCaptcha = false, 3000);
                         })
-                        .addOnFailureListener(e -> {
-                            isProcessingCaptcha = false;
-                        });
-
-                } catch (Exception e) {
-                    isProcessingCaptcha = false;
-                }
+                        .addOnFailureListener(e -> isProcessingCaptcha = false);
+                } catch (Exception e) { isProcessingCaptcha = false; }
             }
-
             @Override
-            public void onFailure(int errorCode) {
-                isProcessingCaptcha = false;
-            }
+            public void onFailure(int errorCode) { isProcessingCaptcha = false; }
         });
     }
-
     @Override
     public void onInterrupt() {}
 }`;
@@ -351,23 +378,14 @@ public class AutoClickService extends AccessibilityService {
     let content = config.modResults.contents;
     if (config.modResults.language === 'kt') {
       if (!content.includes('com.irctcgodmode.IRCTCBridgePackage')) {
-        content = content.replace(
-          /return PackageList\(this\)\.packages/g,
-          'val customPackagesList = PackageList(this).packages\n          customPackagesList.add(com.irctcgodmode.IRCTCBridgePackage())\n          return customPackagesList'
-        );
+        content = content.replace(/return PackageList\(this\)\.packages/g, 'val customPackagesList = PackageList(this).packages\n          customPackagesList.add(com.irctcgodmode.IRCTCBridgePackage())\n          return customPackagesList');
       }
     } else if (config.modResults.language === 'java') {
       if (!content.includes('com.irctcgodmode.IRCTCBridgePackage')) {
         if (content.includes('List<ReactPackage> packages = new PackageList(this).getPackages();')) {
-            content = content.replace(
-                'List<ReactPackage> packages = new PackageList(this).getPackages();',
-                'List<ReactPackage> packages = new PackageList(this).getPackages();\n          packages.add(new com.irctcgodmode.IRCTCBridgePackage());'
-            );
+            content = content.replace('List<ReactPackage> packages = new PackageList(this).getPackages();', 'List<ReactPackage> packages = new PackageList(this).getPackages();\n          packages.add(new com.irctcgodmode.IRCTCBridgePackage());');
         } else {
-            content = content.replace(
-                /return new PackageList\(this\)\.getPackages\(\);/g,
-                'List<ReactPackage> customPackagesList = new PackageList(this).getPackages();\n          customPackagesList.add(new com.irctcgodmode.IRCTCBridgePackage());\n          return customPackagesList;'
-            );
+            content = content.replace(/return new PackageList\(this\)\.getPackages\(\);/g, 'List<ReactPackage> customPackagesList = new PackageList(this).getPackages();\n          customPackagesList.add(new com.irctcgodmode.IRCTCBridgePackage());\n          return customPackagesList;');
         }
       }
     }
