@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - master
-  workflow_dispatch: # Allows you to run the build manually from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,21 +19,19 @@ jobs:
       - name: ⚙️ Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20' # Node.js 20 (Required for latest Expo)
 
       - name: 📦 Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps # Bypasses strict peer dependency checks
 
       - name: 🏗️ Expo Prebuild (Generate Native Android Code)
-        # This is the most critical step. It triggers your custom config plugin
-        # (withIRCTCAutomator.js) to write the Java/XML files into the android folder.
         run: npx expo prebuild --platform android --clean
 
       - name: ☕ Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17' # React Native 0.74 requires Java 17
+          java-version: '17'
 
       - name: 🔐 Make gradlew executable
         run: chmod +x android/gradlew
