@@ -14,18 +14,20 @@ import {
   Linking 
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// 1. कैप्टचा रीड करने के लिए ML Kit इम्पोर्ट (जो पहले मिसिंग था)
+import TextRecognition from '@react-native-ml-kit/text-recognition';
 
-// यह ब्रिज हम अगली जावा फाइल में बनाएंगे
 const { IRCTCBridge } = NativeModules;
 
 export default function App() {
   const [trainNumber, setTrainNumber] = useState('');
   const [passengerName, setPassengerName] = useState('');
   const [passengerAge, setPassengerAge] = useState('');
-  const [travelClass, setTravelClass] = useState('SL'); // Default Sleeper
+  const [travelClass, setTravelClass] = useState('SL');
   
   const [isGodModeActive, setIsGodModeActive] = useState(false);
   const [hasPermission, setHasPermission] = useState(false);
+  const [ocrText, setOcrText] = useState(''); // कैप्टचा रिज़ल्ट स्टोर करने के लिए
 
   useEffect(() => {
     loadSavedData();
@@ -77,7 +79,6 @@ export default function App() {
       await AsyncStorage.setItem('passengerAge', passengerAge);
       await AsyncStorage.setItem('travelClass', travelClass);
 
-      // जावा बैकएंड को डेटा भेज रहे हैं ताकि ऑटो-क्लिकर को पता रहे क्या टाइप करना है
       if (IRCTCBridge && IRCTCBridge.syncPassengerData) {
         IRCTCBridge.syncPassengerData(trainNumber, passengerName, passengerAge, travelClass);
       }
@@ -96,9 +97,32 @@ export default function App() {
 
     setIsGodModeActive(value);
     
-    // ऑटो-क्लिकर सर्विस को ऑन/ऑफ करने का कमांड
     if (IRCTCBridge && IRCTCBridge.setGodModeStatus) {
       IRCTCBridge.setGodModeStatus(value);
+    }
+  };
+
+  // 2. Captcha Bypass (OCR Engine) का असली लॉजिक 
+  const testCaptchaEngine = async () => {
+    // यहाँ भविष्य में आप स्क्रीनशॉट इमेज का लोकल पाथ (imageUri) पास कर सकते हैं।
+    // अभी के लिए इसे डमी रखा है ताकि ऐप क्रैश न हो।
+    const dummyImageUri = null; 
+    
+    if (!dummyImageUri) {
+      Alert.alert('Info', 'बैकग्राउंड स्क्रीनशॉट या इमेज पिकर लॉजिक कनेक्ट करना बाकी है!');
+      return;
+    }
+
+    try {
+      const result = await TextRecognition.recognize(dummyImageUri);
+      // IRCTC कैप्टचा में अक्सर फालतू स्पेस आ जाते हैं, उन्हें हटा रहे हैं
+      const cleanedText = result.text.replace(/\s+/g, '');
+      setOcrText(cleanedText);
+      Alert.alert('Captcha Bypassed 🚀', `Detected: ${cleanedText}`);
+      
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Error', 'कैप्टचा रीड करने में समस्या हुई।');
     }
   };
 
@@ -180,6 +204,22 @@ export default function App() {
           <TouchableOpacity style={styles.saveBtn} onPress={saveDataLocally}>
             <Text style={styles.saveBtnText}>💾 SAVE & SYNC DATA</Text>
           </TouchableOpacity>
+        </View>
+
+        {/* Captcha Engine Status Card (नया जोड़ा गया है) */}
+        <View style={styles.card}>
+           <Text style={styles.cardTitle}>OCR Captcha Engine</Text>
+           <Text style={{ color: '#888', fontSize: 12, marginBottom: 10 }}>
+              Text Recognition ML-Kit Status: Active
+           </Text>
+           <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#FF9800' }]} onPress={testCaptchaEngine}>
+            <Text style={styles.saveBtnText}>🔍 TEST CAPTCHA ENGINE</Text>
+          </TouchableOpacity>
+          {ocrText !== '' && (
+            <Text style={{ color: '#00E676', fontSize: 16, marginTop: 10, textAlign: 'center', fontWeight: 'bold' }}>
+               Result: {ocrText}
+            </Text>
+          )}
         </View>
 
         {/* God Mode Toggle */}
