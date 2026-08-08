@@ -4,7 +4,6 @@ const path = require('path');
 
 module.exports = function withIRCTCAutomator(config) {
   
-  // 1. Android Manifest Updates (Permission & IRCTC Package Query)
   config = withAndroidManifest(config, (config) => {
     const manifest = config.modResults;
     
@@ -14,9 +13,7 @@ module.exports = function withIRCTCAutomator(config) {
         manifest.manifest.queries[0].package = [];
     }
 
-    // IRCTC Official App Package
     const packagesToQuery = ["cris.org.in.prs.ima"];
-
     packagesToQuery.forEach(pkg => {
         const exists = manifest.manifest.queries[0].package.some(p => p.$['android:name'] === pkg);
         if (!exists) {
@@ -42,7 +39,6 @@ module.exports = function withIRCTCAutomator(config) {
     return config;
   });
 
-  // 2. Writing Java and XML Files (The Local Backend Engine)
   config = withDangerousMod(config, [
     'android',
     (config) => {
@@ -67,15 +63,17 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.Promise;
-import android.content.Context;
 import android.provider.Settings;
 import android.text.TextUtils;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.HashMap;
 
 public class IRCTCBridgeModule extends ReactContextBaseJavaModule {
     public static String pTrain = "";
-    public static String pName = "";
-    public static String pAge = "";
     public static String pClass = "";
+    public static ArrayList<HashMap<String, String>> passengersList = new ArrayList<>();
     public static boolean isGodModeOn = false;
 
     public IRCTCBridgeModule(ReactApplicationContext context) {
@@ -86,11 +84,22 @@ public class IRCTCBridgeModule extends ReactContextBaseJavaModule {
     public String getName() { return "IRCTCBridge"; }
 
     @ReactMethod
-    public void syncPassengerData(String train, String name, String age, String tClass) {
+    public void syncPassengerData(String train, String tClass, String passengersJson) {
         pTrain = train;
-        pName = name;
-        pAge = age;
         pClass = tClass;
+        passengersList.clear();
+        try {
+            JSONArray arr = new JSONArray(passengersJson);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject obj = arr.getJSONObject(i);
+                HashMap<String, String> map = new HashMap<>();
+                map.put("name", obj.getString("name"));
+                map.put("age", obj.getString("age"));
+                passengersList.add(map);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     @ReactMethod
@@ -105,7 +114,7 @@ public class IRCTCBridgeModule extends ReactContextBaseJavaModule {
         try {
             accessibilityEnabled = Settings.Secure.getInt(
                 getReactApplicationContext().getApplicationContext().getContentResolver(),
-                android.provider.Settings.Secure.ACCESSIBILITY_ENABLED);
+                Settings.Secure.ACCESSIBILITY_ENABLED);
         } catch (Settings.SettingNotFoundException e) {}
         
         TextUtils.SimpleStringSplitter mStringColonSplitter = new TextUtils.SimpleStringSplitter(':');
@@ -159,14 +168,27 @@ import android.os.Bundle;
 
 public class AutoClickService extends AccessibilityService {
     private long lastActionTime = 0;
+    private int currentPassengerIndex = 0; // Tracks which passenger is being filled
+
+    // Random Human Delay (400ms to 900ms) to bypass Bot Detection
+    private long getRandomDelay() {
+        return 400 + (long)(Math.random() * 500);
+    }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (!IRCTCBridgeModule.isGodModeOn) return;
         
         CharSequence pkgName = event.getPackageName();
-        // सिर्फ IRCTC ऐप के अंदर ही सर्विस काम करेगी
         if (pkgName == null || !pkgName.toString().contains("cris.org.in.prs.ima")) return;
+
+        // Reset index if we reach booking summary or home (To be safe)
+        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+             CharSequence className = event.getClassName();
+             if (className != null && className.toString().contains("DashboardActivity")) {
+                 currentPassengerIndex = 0; // Reset on Dashboard
+             }
+        }
 
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
         if (rootNode != null) {
@@ -182,39 +204,55 @@ public class AutoClickService extends AccessibilityService {
         String text = textSeq != null ? textSeq.toString().toLowerCase() : "";
         String desc = descSeq != null ? descSeq.toString().toLowerCase() : "";
 
-        // Delay to mimic human and avoid app crash
-        if (System.currentTimeMillis() - lastActionTime > 300) {
+        if (System.currentTimeMillis() - lastActionTime > getRandomDelay()) {
             
-            // 1. Auto Login Click
+            // 1. Auto Login
             if ((text.equals("login") || desc.equals("login")) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
             
-            // 2. Train Selection (Based on React Native Saved Data)
+            // 2. Train Selection
             if (!IRCTCBridgeModule.pTrain.isEmpty() && text.contains(IRCTCBridgeModule.pTrain) && node.isClickable()) {
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
 
-            // 3. Auto Fill Passenger Name
-            if ((text.contains("first name") || text.contains("passenger name") || desc.contains("name")) && node.getClassName().toString().contains("EditText")) {
-                Bundle arguments = new Bundle();
-                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, IRCTCBridgeModule.pName);
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+            // 3. Class Selection (SL / 3A)
+            if (!IRCTCBridgeModule.pClass.isEmpty() && text.equals(IRCTCBridgeModule.pClass.toLowerCase()) && node.isClickable()) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
                 lastActionTime = System.currentTimeMillis();
                 return;
             }
-            
-            // 4. Auto Fill Age
-            if ((text.contains("age") || desc.contains("age")) && node.getClassName().toString().contains("EditText")) {
-                Bundle arguments = new Bundle();
-                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, IRCTCBridgeModule.pAge);
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
-                lastActionTime = System.currentTimeMillis();
-                return;
+
+            // 4. Fill Passenger Name & Age dynamically from ArrayList
+            if (currentPassengerIndex < IRCTCBridgeModule.passengersList.size()) {
+                
+                String targetName = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("name");
+                String targetAge = IRCTCBridgeModule.passengersList.get(currentPassengerIndex).get("age");
+
+                // Fill Name
+                if ((text.contains("first name") || text.contains("passenger name") || desc.contains("name")) && node.getClassName().toString().contains("EditText")) {
+                    Bundle arguments = new Bundle();
+                    arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName);
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+                    lastActionTime = System.currentTimeMillis();
+                    return;
+                }
+                
+                // Fill Age & Move to Next Index
+                if ((text.contains("age") || desc.contains("age") || text.equals("yea")) && node.getClassName().toString().contains("EditText")) {
+                    Bundle arguments = new Bundle();
+                    arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetAge);
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+                    lastActionTime = System.currentTimeMillis();
+                    
+                    // Increment passenger index after age is filled so it moves to next person
+                    currentPassengerIndex++; 
+                    return;
+                }
             }
         }
 
@@ -237,7 +275,6 @@ public class AutoClickService extends AccessibilityService {
     }
   ]);
 
-  // 3. Inject Package to React Native MainApplication
   config = withMainApplication(config, (config) => {
     let content = config.modResults.contents;
     if (config.modResults.language === 'kt') {
